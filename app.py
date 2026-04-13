@@ -1,9 +1,3 @@
-"""
-Figma 온라인상세 내보내기 - Streamlit 웹앱 v1.2
-- 어린이과학동아 / 어린이수학동아 / 과학동아 지원
-- 완료 후 ZIP으로 다운로드
-"""
-
 import re
 import io
 import zipfile
@@ -17,311 +11,260 @@ from urllib.parse import unquote
 COUPANG_MAX_H  = 3000
 COUPANG_MAX_MB = 1.0
 MAX_WORKERS    = 6
-PX_TO_PLATFORM = {"940":"예스24","900":"교보","880":"DS","860":"네이버","700":"알라딘"}
-THUMB_MAP = {"ds스토어1000","wh1000","wh900","wh600","wh500","wh458","알라딘_w900","예스24_h600","교보_w458"}
-
-# 썸네일 섹션 이름 후보 (다양한 파일 구조 대응)
-THUMB_SEC_CANDIDATES = [
-    "\ucf74\ud3ec\ub10c\ud2b8-\uc378\ub124\uc77c",  # 컴포넌트-썸네일
-    "thumbnail",
-    "Thumbnail",
-    "\uc378\ub124\uc77c",  # 썸네일
-]
-THUMB_KEYWORD = "\ub0b4\ubcf4\ub0b4\uae30"  # 내보내기
+PX_TO_PLATFORM = {"940":"yes24","900":"kyobo","880":"DS","860":"naver","700":"aladin"}
+PX_DISPLAY     = {"940":"\uc608\uc2a4\ub85424","900":"\uad50\ubcf4","880":"DS","860":"\ub124\uc774\ubc84","700":"\uc54c\ub77c\ub518"}
+THUMB_MAP = {"ds\uc2a4\ud1a01000","wh1000","wh900","wh600","wh500","wh458","\uc54c\ub77c\ub518_w900","\uc608\uc2a4\ub85424_h600","\uad50\ubcf4_w458"}
 
 def api_get(path, token):
-    r = requests.get("https://api.figma.com/v1" + path, headers={"X-Figma-Token": token})
-    r.raise_for_status()
-    return r.json()
+        r = requests.get("https://api.figma.com/v1" + path, headers={"X-Figma-Token": token})
+        r.raise_for_status()
+        return r.json()
 
 def get_image_urls(file_key, node_ids, fmt, token):
-    ids = ",".join(node_ids.keys())
-    r = requests.get(
-        "https://api.figma.com/v1/images/" + file_key,
-        headers={"X-Figma-Token": token},
-        params={"ids": ids, "format": fmt, "scale": 1.0}
-    )
-    r.raise_for_status()
-    data = r.json()
-    if data.get("err"):
-        raise Exception("Figma API error: " + str(data["err"]))
-    return data.get("images", {})
+        ids = ",".join(node_ids.keys())
+        r = requests.get(
+            "https://api.figma.com/v1/images/" + file_key,
+            headers={"X-Figma-Token": token},
+            params={"ids": ids, "format": fmt, "scale": 1.0}
+        )
+        r.raise_for_status()
+        data = r.json()
+        if data.get("err"):
+                    raise Exception("Figma API error: " + str(data["err"]))
+                return data.get("images", {})
 
 def get_url(image_urls, node_id):
-    return image_urls.get(node_id) or image_urls.get(node_id.replace(":", "-"))
+        return image_urls.get(node_id) or image_urls.get(node_id.replace(":", "-"))
 
 def discover_nodes(file_key, node_id, token):
-    data     = api_get("/files/" + file_key + "/nodes?ids=" + node_id + "&depth=2", token)
+        data     = api_get("/files/" + file_key + "/nodes?ids=" + node_id + "&depth=2", token)
     canvas   = data["nodes"][node_id]["document"]
     children = canvas.get("children", [])
-    sections = {c["name"]: c["id"] for c in children}
 
-    # 썸네일 섹션: 후보 이름 중 일치하는 것 찾기
-    thumb_sec_id = None
-    for candidate in THUMB_SEC_CANDIDATES:
-        if candidate in sections:
-            thumb_sec_id = sections[candidate]
-            break
+    # section type only
+    secs = [c for c in children if c.get("type") == "SECTION"]
+    if len(secs) < 2:
+                raise Exception("Need at least 2 sections. Found: " + str([c["name"] for c in children]))
 
-    # 상세 섹션: 썸네일 섹션 제외한 첫 번째 SECTION
-    thumb_sec_name = None
-    for candidate in THUMB_SEC_CANDIDATES:
-        if candidate in sections:
-            thumb_sec_name = candidate
-            break
+    # thumb section = has child with name containing export keyword
+    # detail section = the other one
+    # Strategy: fetch depth=3 for all sections and check
+    sec_ids = ",".join(s["id"] for s in secs)
+    td = api_get("/files/" + file_key + "/nodes?ids=" + sec_ids + "&depth=3", token)
 
+    thumb_sec_id  = None
     detail_sec_id = None
-    for c in children:
-        if c.get("type") == "SECTION" and c["name"] != thumb_sec_name:
-            detail_sec_id = c["id"]
-            break
 
-    if not thumb_sec_id or not detail_sec_id:
-        raise Exception("\uc139\uc158\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \ubc1c\uacac: " + str(list(sections.keys())))
+    for sec in secs:
+                sid  = sec["id"]
+                doc  = td["nodes"][sid]["document"]
+                # look for THUMB_MAP names anywhere in depth-3
+                found_thumb = False
+                for child in doc.get("children", []):
+                                for sub in child.get("children", []) if child.get("children") else []:
+                                                    if sub.get("name") in THUMB_MAP:
+                                                                            found_thumb = True
+                                                                            break
+                                                                    if found_thumb:
+                                                                                        break
+                                                                                if found_thumb:
+                                                                                                thumb_sec_id = sid
+else:
+            detail_sec_id = sid
 
-    td = api_get("/files/" + file_key + "/nodes?ids=" + thumb_sec_id + "," + detail_sec_id + "&depth=2", token)
+    if not thumb_sec_id:
+                # fallback: first section = thumb
+                thumb_sec_id  = secs[0]["id"]
+                detail_sec_id = secs[1]["id"]
 
+    # thumb nodes
     thumb_nodes = {}
-    for c in td["nodes"][thumb_sec_id]["document"].get("children", []):
-        if THUMB_KEYWORD in c["name"]:
-            cid = c["id"]
-            sd  = api_get("/files/" + file_key + "/nodes?ids=" + cid + "&depth=1", token)
-            for sub in sd["nodes"][cid]["document"].get("children", []):
-                if sub["name"] in THUMB_MAP:
-                    thumb_nodes[sub["id"]] = sub["name"]
+    thumb_doc = td["nodes"][thumb_sec_id]["document"]
+    for child in thumb_doc.get("children", []):
+                for sub in child.get("children", []) if child.get("children") else []:
+                                if sub.get("name") in THUMB_MAP:
+                                                    thumb_nodes[sub["id"]] = sub["name"]
 
-    detail_nodes   = {}
+                        # detail nodes
+                        detail_nodes   = {}
     coupang_parent = None
     coupang_prefix = ""
-    for c in td["nodes"][detail_sec_id]["document"].get("children", []):
-        name = c["name"]
+    detail_doc = td["nodes"][detail_sec_id]["document"]
+    for c in detail_doc.get("children", []):
+                name = c["name"]
         if "780" in name and c["type"] in ("INSTANCE", "FRAME", "COMPONENT"):
-            coupang_parent = c["id"]
-            m = re.match(r"^(.+?)\(780\)", name)
-            if m:
-                coupang_prefix = m.group(1)
-            continue
+                        coupang_parent = c["id"]
+                        m = re.match(r"^(.+?)\(780\)", name)
+                        if m:
+                                            coupang_prefix = m.group(1)
+                                        continue
         m = re.match(r"^(.+?)\((\d+)\)", name)
         if m:
-            platform = PX_TO_PLATFORM.get(m.group(2))
+                        px = m.group(2)
+            platform = PX_DISPLAY.get(px)
             if platform and c["type"] in ("INSTANCE", "FRAME", "COMPONENT"):
-                detail_nodes[c["id"]] = m.group(1) + "(" + m.group(2) + ")_" + platform
+                                detail_nodes[c["id"]] = m.group(1) + "(" + px + ")_" + platform
 
-    if not thumb_nodes:    raise Exception("\uc378\ub124\uc77c \ub178\ub4dc\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
-    if not detail_nodes:   raise Exception("\uc0c1\uc138\ud398\uc774\uc9c0 \ub178\ub4dc\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
-    if not coupang_parent: raise Exception("\ucfe0\ud321 \ubd80\ubaa8 \ub178\ub4dc(780)\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
-    return thumb_nodes, detail_nodes, coupang_parent, coupang_prefix
+    if not thumb_nodes:    raise Exception("Thumb nodes not found.")
+            if not detail_nodes:   raise Exception("Detail nodes not found.")
+                    if not coupang_parent: raise Exception("Coupang node(780) not found.")
+                            return thumb_nodes, detail_nodes, coupang_parent, coupang_prefix
 
 def compress_jpg(img, max_size_mb=None):
-    quality = 95
+        quality = 95
     while quality >= 10:
-        buf = io.BytesIO()
+                buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality, optimize=True)
         if max_size_mb is None or buf.tell() / (1024*1024) <= max_size_mb:
-            return buf.getvalue()
+                        return buf.getvalue()
         quality -= 5
     return buf.getvalue()
 
 def download_nodes_parallel(file_key, node_dict, fmt, token):
-    image_urls = get_image_urls(file_key, node_dict, fmt, token)
+        image_urls = get_image_urls(file_key, node_dict, fmt, token)
     results    = {}
-
     def fetch_one(args):
-        nid, fname = args
+                nid, fname = args
         url = get_url(image_urls, nid)
         if not url:
-            return fname, None
-        r = requests.get(url)
-        r.raise_for_status()
+                        return fname, None
+        r = requests.get(url); r.raise_for_status()
         if fmt == "jpg":
-            data = compress_jpg(Image.open(io.BytesIO(r.content)).convert("RGB"), COUPANG_MAX_MB)
-        else:
+                        data = compress_jpg(Image.open(io.BytesIO(r.content)).convert("RGB"), COUPANG_MAX_MB)
+else:
             data = r.content
         return fname, data
-
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futures = {ex.submit(fetch_one, (nid, fname)): fname
-                   for nid, fname in node_dict.items()}
+                futures = {ex.submit(fetch_one, (nid, fname)): fname for nid, fname in node_dict.items()}
         for f in as_completed(futures):
-            fname, data = f.result()
-            if data:
-                results[fname] = data
-    return results
+                        fname, data = f.result()
+            if data: results[fname] = data
+                    return results
 
 def split_recursive(s, max_h, warnings):
-    if s["h"] <= max_h:
-        return [s]
-    if not s.get("split"):
-        warnings.append("[강제분할] '" + s["name"] + "' " + str(int(s["h"])) + "px > " + str(max_h) + "px")
-    half   = s["h"] / 2.0
-    origin = s.get("split_origin", s["name"])
-    top_p  = dict(s); top_p["h"] = half; top_p["split"] = "top"; top_p["split_origin"] = origin
-    bot_p  = dict(s); bot_p["y_rel"] = s["y_rel"] + half; bot_p["h"] = s["h"] - half
+        if s["h"] <= max_h: return [s]
+                if not s.get("split"):
+                            warnings.append("[split] '" + s["name"] + "' " + str(int(s["h"])) + "px > " + str(max_h) + "px")
+                        half = s["h"] / 2.0; origin = s.get("split_origin", s["name"])
+    top_p = dict(s); top_p["h"] = half; top_p["split"] = "top"; top_p["split_origin"] = origin
+    bot_p = dict(s); bot_p["y_rel"] = s["y_rel"] + half; bot_p["h"] = s["h"] - half
     bot_p["split"] = "bottom"; bot_p["split_origin"] = origin
     return split_recursive(top_p, max_h, warnings) + split_recursive(bot_p, max_h, warnings)
 
 def group_by_height(sections, max_h, warnings):
-    groups = []; current = []; current_h = 0
+        groups = []; current = []; current_h = 0
     for s in sections:
-        if s["h"] > max_h:
-            if current: groups.append(current); current = []; current_h = 0
-            for piece in split_recursive(s, max_h, warnings):
-                groups.append([piece])
-            continue
+                if s["h"] > max_h:
+                                if current: groups.append(current); current = []; current_h = 0
+                                                for piece in split_recursive(s, max_h, warnings): groups.append([piece])
+                                                                continue
         if current_h + s["h"] > max_h and current:
-            groups.append(current); current = []; current_h = 0
+                        groups.append(current); current = []; current_h = 0
         current.append(s); current_h += s["h"]
     if current: groups.append(current)
-    return groups
+            return groups
 
 def export_coupang(file_key, coupang_id, coupang_prefix, token, warnings):
-    url = "https://api.figma.com/v1/files/" + file_key + "/nodes?ids=" + coupang_id + "&depth=1"
-    r   = requests.get(url, headers={"X-Figma-Token": token}); r.raise_for_status()
+        url = "https://api.figma.com/v1/files/" + file_key + "/nodes?ids=" + coupang_id + "&depth=1"
+    r = requests.get(url, headers={"X-Figma-Token": token}); r.raise_for_status()
     parent   = r.json()["nodes"][coupang_id]["document"]
     parent_y = parent["absoluteBoundingBox"]["y"]
     parent_h = parent["absoluteBoundingBox"]["height"]
-
     sections = []
     for child in parent.get("children", []):
-        bb    = child.get("absoluteBoundingBox", {})
+                bb = child.get("absoluteBoundingBox", {})
         y_abs = bb.get("y", 0); h = bb.get("height", 0)
-        sections.append({"id": child["id"], "name": child["name"],
-                         "y_abs": y_abs, "y_rel": y_abs - parent_y, "h": h})
+        sections.append({"id": child["id"], "name": child["name"], "y_abs": y_abs, "y_rel": y_abs - parent_y, "h": h})
     sections.sort(key=lambda s: s["y_abs"])
     groups = group_by_height(sections, COUPANG_MAX_H, warnings)
-
     img_urls = get_image_urls(file_key, {coupang_id: "full"}, "jpg", token)
     full_url = get_url(img_urls, coupang_id)
-    if not full_url:
-        raise Exception("쿠팡 부모 프레임 URL 없음")
-
-    r2       = requests.get(full_url); r2.raise_for_status()
+    if not full_url: raise Exception("Coupang URL not found")
+            r2 = requests.get(full_url); r2.raise_for_status()
     full_img = Image.open(io.BytesIO(r2.content)).convert("RGB")
     img_w, img_h = full_img.size
-    scale    = img_h / parent_h
-
+    scale = img_h / parent_h
     results = {}
     for i, g in enumerate(groups):
-        num      = i + 1
+                num = i + 1
         y_top    = min(s["y_rel"] for s in g)
         y_bottom = max(s["y_rel"] + s["h"] for s in g)
-        top      = max(0, int(y_top * scale))
-        bottom   = min(img_h, int(y_bottom * scale))
-        fname    = coupang_prefix + "(780)_쿠팡_" + str(num).zfill(2)
-        data     = compress_jpg(full_img.crop((0, top, img_w, bottom)), COUPANG_MAX_MB)
+        top = max(0, int(y_top * scale)); bottom = min(img_h, int(y_bottom * scale))
+        fname = coupang_prefix + "(780)_\ucfe0\ud321_" + str(num).zfill(2)
+        data = compress_jpg(full_img.crop((0, top, img_w, bottom)), COUPANG_MAX_MB)
         results[fname] = data
     return results
 
 def make_zip(thumb_results, detail_results, coupang_results):
-    buf = io.BytesIO()
+        buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname, data in thumb_results.items():
-            zf.writestr("썸네일_PNG/" + fname + ".png", data)
-        for fname, data in detail_results.items():
-            zf.writestr("상세페이지_JPG/" + fname + ".jpg", data)
-        for fname, data in coupang_results.items():
-            zf.writestr("쿠팡_JPG/" + fname + ".jpg", data)
-    return buf.getvalue()
+                for fname, data in thumb_results.items():
+                                zf.writestr("\uc378\ub124\uc77c_PNG/" + fname + ".png", data)
+                            for fname, data in detail_results.items():
+                                            zf.writestr("\uc0c1\uc138\ud398\uc774\uc9c0_JPG/" + fname + ".jpg", data)
+                                        for fname, data in coupang_results.items():
+                                                        zf.writestr("\ucfe0\ud321_JPG/" + fname + ".jpg", data)
+                                                return buf.getvalue()
 
-# Streamlit UI
-st.set_page_config(page_title="Figma 온라인상세 내보내기", page_icon="🎨", layout="centered")
-st.title("🎨 Figma 온라인상세 내보내기")
-st.caption("어린이과학동아 · 어린이수학동아 · 과학동아 | v1.2")
+st.set_page_config(page_title="Figma \uc628\ub77c\uc778\uc0c1\uc138 \ub0b4\ubcf4\ub0b4\uae30", page_icon="\U0001f3a8", layout="centered")
+st.title("\U0001f3a8 Figma \uc628\ub77c\uc778\uc0c1\uc138 \ub0b4\ubcf4\ub0b4\uae30")
+st.caption("\uc5b4\ub9b0\uc774\uacfc\ud559\ub3d9\uc544 \xb7 \uc5b4\ub9b0\uc774\uc218\ud559\ub3d9\uc544 \xb7 \uacfc\ud559\ub3d9\uc544 | v1.2")
 st.divider()
-
-st.subheader("① Figma 토큰")
+st.subheader("\u2460 Figma \ud1a0\ud070")
 token = st.text_input("token", type="password", placeholder="figd_xxxxxxxxxxxxxxxx", label_visibility="collapsed")
 st.divider()
-
-st.subheader("② Figma 주소")
+st.subheader("\u2461 Figma \uc8fc\uc18c")
 figma_url = st.text_input("url", placeholder="https://www.figma.com/design/...?node-id=...", label_visibility="collapsed")
 st.divider()
-
-run = st.button("🚀 내보내기 실행", type="primary", use_container_width=True)
+run = st.button("\U0001f680 \ub0b4\ubcf4\ub0b4\uae30 \uc2e4\ud589", type="primary", use_container_width=True)
 
 if run:
-    if not token:
-        st.error("Figma 토큰을 입력하세요.")
-        st.stop()
-    if not figma_url:
-        st.error("Figma 주소를 입력하세요.")
-        st.stop()
-
-    url        = unquote(figma_url.strip())
+        if not token: st.error("\ud1a0\ud070\uc744 \uc785\ub825\ud558\uc138\uc694."); st.stop()
+                if not figma_url: st.error("\uc8fc\uc18c\ub97c \uc785\ub825\ud558\uc138\uc694."); st.stop()
+                        url = unquote(figma_url.strip())
     key_match  = re.search(r"/(?:design|file)/([a-zA-Z0-9_-]+)", url)
     node_match = re.search(r"node-id=([0-9]+)[%\-]([0-9]+)", url)
-
-    if not key_match:
-        st.error("URL에서 파일 키를 찾을 수 없습니다.")
-        st.stop()
-    if not node_match:
-        st.error("URL에서 node-id를 찾을 수 없습니다. 캔버스를 선택 후 URL을 복사하세요.")
-        st.stop()
-
-    file_key  = key_match.group(1)
+    if not key_match: st.error("URL key not found."); st.stop()
+            if not node_match: st.error("URL node-id not found."); st.stop()
+                    file_key  = key_match.group(1)
     node_id   = node_match.group(1) + ":" + node_match.group(2)
     warnings  = []
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    status    = st.empty()
-    bar       = st.progress(0)
-
+    status = st.empty(); bar = st.progress(0)
     try:
-        status.info("🔍 노드 구조 탐색 중...")
-        bar.progress(5)
+                status.info("\U0001f50d \ub178\ub4dc \ud0d0\uc0c9 \uc911..."); bar.progress(5)
         thumb_nodes, detail_nodes, coupang_id, coupang_prefix = discover_nodes(file_key, node_id, token)
-        status.info("✅ 탐색 완료 — 썸네일 " + str(len(thumb_nodes)) + "개 · 상세 " + str(len(detail_nodes)) + "개")
-
+        status.info("\u2705 \ud0d0\uc0c9 \uc644\ub8cc \u2014 \uc378\ub124\uc77c " + str(len(thumb_nodes)) + "\uac1c \xb7 \uc0c1\uc138 " + str(len(detail_nodes)) + "\uac1c")
         bar.progress(10)
-        status.info("🖼️ 썸네일 PNG 다운로드 중... (" + str(len(thumb_nodes)) + "개)")
+        status.info("\U0001f5bc\ufe0f \uc378\ub124\uc77c PNG \ub2e4\uc6b4\ub85c\ub4dc \uc911... (" + str(len(thumb_nodes)) + "\uac1c)")
         thumb_results = download_nodes_parallel(file_key, thumb_nodes, "png", token)
         bar.progress(40)
-
-        status.info("📄 상세페이지 JPG 다운로드 중... (" + str(len(detail_nodes)) + "개)")
+        status.info("\U0001f4c4 \uc0c1\uc138\ud398\uc774\uc9c0 JPG \ub2e4\uc6b4\ub85c\ub4dc \uc911... (" + str(len(detail_nodes)) + "\uac1c)")
         detail_results = download_nodes_parallel(file_key, detail_nodes, "jpg", token)
         bar.progress(75)
-
-        status.info("🛒 쿠팡 이미지 처리 중...")
+        status.info("\U0001f6d2 \ucfe0\ud321 \uc774\ubbf8\uc9c0 \ucc98\ub9ac \uc911...")
         coupang_results = export_coupang(file_key, coupang_id, coupang_prefix, token, warnings)
         bar.progress(95)
-
-        status.info("📦 ZIP 파일 생성 중...")
+        status.info("\U0001f4e6 ZIP \uc0dd\uc131 \uc911...")
         zip_data = make_zip(thumb_results, detail_results, coupang_results)
         bar.progress(100)
-        status.success("✅ 완료!")
-
+        status.success("\u2705 \uc644\ub8cc!")
         if warnings:
-            with st.expander("⚠️ 경고 메시지", expanded=True):
-                for w in warnings:
-                    st.warning(w)
-
-        st.divider()
+                        with st.expander("\u26a0\ufe0f \uacbd\uace0", expanded=True):
+                                            for w in warnings: st.warning(w)
+                                                        st.divider()
         col1, col2, col3 = st.columns(3)
-        col1.metric("썸네일_PNG",     str(len(thumb_results)) + "장")
-        col2.metric("상세페이지_JPG", str(len(detail_results)) + "장")
-        col3.metric("쿠팡_JPG",       str(len(coupang_results)) + "장")
-
-        st.download_button(
-            label="📥 ZIP 다운로드",
-            data=zip_data,
-            file_name="figma_output_" + timestamp + ".zip",
-            mime="application/zip",
-            use_container_width=True,
-            type="primary"
-        )
-
-    except Exception as e:
+        col1.metric("\uc378\ub124\uc77c_PNG", str(len(thumb_results)) + "\uc7a5")
+        col2.metric("\uc0c1\uc138\ud398\uc774\uc9c0_JPG", str(len(detail_results)) + "\uc7a5")
+        col3.metric("\ucfe0\ud321_JPG", str(len(coupang_results)) + "\uc7a5")
+        st.download_button(label="\U0001f4e5 ZIP \ub2e4\uc6b4\ub85c\ub4dc", data=zip_data,
+                                       file_name="figma_output_" + timestamp + ".zip", mime="application/zip",
+                                       use_container_width=True, type="primary")
+except Exception as e:
         bar.progress(0)
         import traceback
-        status.error("❌ 오류: " + str(e))
+        status.error("\u274c \uc624\ub958: " + str(e))
         st.code(traceback.format_exc())
 
-with st.expander("📖 사용 방법"):
-    st.markdown("""
-1. **Figma 토큰** 입력 (figd_로 시작하는 Personal Access Token)
-2. **Figma 캔버스** 선택 후 브라우저 URL 전체 복사
-3. **실행** 버튼 클릭
-4. 완료 후 **ZIP 다운로드** 버튼 클릭
-
-**지원 잡지:** 어린이과학동아 · 어린이수학동아 · 과학동아
-**출력 구조:** 썸네일_PNG / 상세페이지_JPG / 쿠팡_JPG (자동 분할)
-    """)
+with st.expander("\U0001f4d6 \uc0ac\uc6a9 \ubc29\ubc95"):
+        st.markdown("1. Figma \ud1a0\ud070 \uc785\ub825\n2. \uce94\ubc84\uc2a4 \uc120\ud0dd \ud6c4 URL \ubcf5\uc0ac\n3. \uc2e4\ud589 \ud074\ub9ad\n4. ZIP \ub2e4\uc6b4\ub85c\ub4dc")
