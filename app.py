@@ -19,8 +19,8 @@ COUPANG_MAX_MB = 1.0
 MAX_WORKERS    = 6
 PX_TO_PLATFORM = {"940":"예스24","900":"교보","880":"DS","860":"네이버","700":"알라딘"}
 THUMB_MAP = {"ds스토어1000","wh1000","wh900","wh600","wh500","wh458","알라딘_w900","예스24_h600","교보_w458"}
-THUMB_SEC     = "컴포넌트-썸네일"
-THUMB_KEYWORD = "내보내기"
+THUMB_SEC     = "\ucf74\ud3ec\ub10c\ud2b8-\uc378\ub124\uc77c"
+THUMB_KEYWORD = "\ub0b4\ubcf4\ub0b4\uae30"
 
 def api_get(path, token):
     r = requests.get("https://api.figma.com/v1" + path, headers={"X-Figma-Token": token})
