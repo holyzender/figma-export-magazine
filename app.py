@@ -1,5 +1,5 @@
 """
-Figma 온라인상세 내보내기 - Streamlit 웹앱 v1.1
+Figma 온라인상세 내보내기 - Streamlit 웹앱 v1.2
 - 어린이과학동아 / 어린이수학동아 / 과학동아 지원
 - 완료 후 ZIP으로 다운로드
 """
@@ -19,8 +19,15 @@ COUPANG_MAX_MB = 1.0
 MAX_WORKERS    = 6
 PX_TO_PLATFORM = {"940":"예스24","900":"교보","880":"DS","860":"네이버","700":"알라딘"}
 THUMB_MAP = {"ds스토어1000","wh1000","wh900","wh600","wh500","wh458","알라딘_w900","예스24_h600","교보_w458"}
-THUMB_SEC     = "\ucf74\ud3ec\ub10c\ud2b8-\uc378\ub124\uc77c"
-THUMB_KEYWORD = "\ub0b4\ubcf4\ub0b4\uae30"
+
+# 썸네일 섹션 이름 후보 (다양한 파일 구조 대응)
+THUMB_SEC_CANDIDATES = [
+    "\ucf74\ud3ec\ub10c\ud2b8-\uc378\ub124\uc77c",  # 컴포넌트-썸네일
+    "thumbnail",
+    "Thumbnail",
+    "\uc378\ub124\uc77c",  # 썸네일
+]
+THUMB_KEYWORD = "\ub0b4\ubcf4\ub0b4\uae30"  # 내보내기
 
 def api_get(path, token):
     r = requests.get("https://api.figma.com/v1" + path, headers={"X-Figma-Token": token})
@@ -49,15 +56,28 @@ def discover_nodes(file_key, node_id, token):
     children = canvas.get("children", [])
     sections = {c["name"]: c["id"] for c in children}
 
-    thumb_sec_id  = sections.get(THUMB_SEC)
+    # 썸네일 섹션: 후보 이름 중 일치하는 것 찾기
+    thumb_sec_id = None
+    for candidate in THUMB_SEC_CANDIDATES:
+        if candidate in sections:
+            thumb_sec_id = sections[candidate]
+            break
+
+    # 상세 섹션: 썸네일 섹션 제외한 첫 번째 SECTION
+    thumb_sec_name = None
+    for candidate in THUMB_SEC_CANDIDATES:
+        if candidate in sections:
+            thumb_sec_name = candidate
+            break
+
     detail_sec_id = None
     for c in children:
-        if c.get("type") == "SECTION" and c["name"] != THUMB_SEC:
+        if c.get("type") == "SECTION" and c["name"] != thumb_sec_name:
             detail_sec_id = c["id"]
             break
 
     if not thumb_sec_id or not detail_sec_id:
-        raise Exception("섹션을 찾을 수 없습니다. 발견: " + str(list(sections.keys())))
+        raise Exception("\uc139\uc158\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \ubc1c\uacac: " + str(list(sections.keys())))
 
     td = api_get("/files/" + file_key + "/nodes?ids=" + thumb_sec_id + "," + detail_sec_id + "&depth=2", token)
 
@@ -87,9 +107,9 @@ def discover_nodes(file_key, node_id, token):
             if platform and c["type"] in ("INSTANCE", "FRAME", "COMPONENT"):
                 detail_nodes[c["id"]] = m.group(1) + "(" + m.group(2) + ")_" + platform
 
-    if not thumb_nodes:    raise Exception("썸네일 노드를 찾을 수 없습니다.")
-    if not detail_nodes:   raise Exception("상세페이지 노드를 찾을 수 없습니다.")
-    if not coupang_parent: raise Exception("쿠팡 부모 노드(780)를 찾을 수 없습니다.")
+    if not thumb_nodes:    raise Exception("\uc378\ub124\uc77c \ub178\ub4dc\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
+    if not detail_nodes:   raise Exception("\uc0c1\uc138\ud398\uc774\uc9c0 \ub178\ub4dc\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
+    if not coupang_parent: raise Exception("\ucfe0\ud321 \ubd80\ubaa8 \ub178\ub4dc(780)\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
     return thumb_nodes, detail_nodes, coupang_parent, coupang_prefix
 
 def compress_jpg(img, max_size_mb=None):
@@ -103,7 +123,6 @@ def compress_jpg(img, max_size_mb=None):
     return buf.getvalue()
 
 def download_nodes_parallel(file_key, node_dict, fmt, token):
-    """UI 콜백 없이 순수 병렬 다운로드 - Streamlit 스레드 이슈 방지"""
     image_urls = get_image_urls(file_key, node_dict, fmt, token)
     results    = {}
 
@@ -207,7 +226,7 @@ def make_zip(thumb_results, detail_results, coupang_results):
 # Streamlit UI
 st.set_page_config(page_title="Figma 온라인상세 내보내기", page_icon="🎨", layout="centered")
 st.title("🎨 Figma 온라인상세 내보내기")
-st.caption("어린이과학동아 · 어린이수학동아 · 과학동아 | v1.1")
+st.caption("어린이과학동아 · 어린이수학동아 · 과학동아 | v1.2")
 st.divider()
 
 st.subheader("① Figma 토큰")
