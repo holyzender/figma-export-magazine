@@ -19,6 +19,8 @@ COUPANG_MAX_MB = 1.0
 MAX_WORKERS    = 6
 PX_TO_PLATFORM = {"940":"예스24","900":"교보","880":"DS","860":"네이버","700":"알라딘"}
 THUMB_MAP = {"ds스토어1000","wh1000","wh900","wh600","wh500","wh458","알라딘_w900","예스24_h600","교보_w458"}
+THUMB_SEC     = "컴포넌트-썸네일"
+THUMB_KEYWORD = "내보내기"
 
 def api_get(path, token):
     r = requests.get("https://api.figma.com/v1" + path, headers={"X-Figma-Token": token})
@@ -47,21 +49,21 @@ def discover_nodes(file_key, node_id, token):
     children = canvas.get("children", [])
     sections = {c["name"]: c["id"] for c in children}
 
-    thumb_sec_id  = sections.get("\ucf74\ud3ec\ub10c\ud2b8-\uc378\ub124\uc77c")
+    thumb_sec_id  = sections.get(THUMB_SEC)
     detail_sec_id = None
     for c in children:
-        if c.get("type") == "SECTION" and c["name"] != "\ucf74\ud3ec\ub10c\ud2b8-\uc378\ub124\uc77c":
+        if c.get("type") == "SECTION" and c["name"] != THUMB_SEC:
             detail_sec_id = c["id"]
             break
 
     if not thumb_sec_id or not detail_sec_id:
-        raise Exception("Section not found. Found: " + str(list(sections.keys())))
+        raise Exception("섹션을 찾을 수 없습니다. 발견: " + str(list(sections.keys())))
 
     td = api_get("/files/" + file_key + "/nodes?ids=" + thumb_sec_id + "," + detail_sec_id + "&depth=2", token)
 
     thumb_nodes = {}
     for c in td["nodes"][thumb_sec_id]["document"].get("children", []):
-        if "\ub0b4\ubcf4\ub0b4\uae30" in c["name"]:
+        if THUMB_KEYWORD in c["name"]:
             cid = c["id"]
             sd  = api_get("/files/" + file_key + "/nodes?ids=" + cid + "&depth=1", token)
             for sub in sd["nodes"][cid]["document"].get("children", []):
@@ -85,9 +87,9 @@ def discover_nodes(file_key, node_id, token):
             if platform and c["type"] in ("INSTANCE", "FRAME", "COMPONENT"):
                 detail_nodes[c["id"]] = m.group(1) + "(" + m.group(2) + ")_" + platform
 
-    if not thumb_nodes:    raise Exception("\uc378\ub124\uc77c \ub178\ub4dc\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
-    if not detail_nodes:   raise Exception("\uc0c1\uc138\ud398\uc774\uc9c0 \ub178\ub4dc\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
-    if not coupang_parent: raise Exception("\ucfe0\ud321 \ubd80\ubaa8 \ub178\ub4dc(780)\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
+    if not thumb_nodes:    raise Exception("썸네일 노드를 찾을 수 없습니다.")
+    if not detail_nodes:   raise Exception("상세페이지 노드를 찾을 수 없습니다.")
+    if not coupang_parent: raise Exception("쿠팡 부모 노드(780)를 찾을 수 없습니다.")
     return thumb_nodes, detail_nodes, coupang_parent, coupang_prefix
 
 def compress_jpg(img, max_size_mb=None):
@@ -172,7 +174,7 @@ def export_coupang(file_key, coupang_id, coupang_prefix, token, warnings):
     img_urls = get_image_urls(file_key, {coupang_id: "full"}, "jpg", token)
     full_url = get_url(img_urls, coupang_id)
     if not full_url:
-        raise Exception("Coupang parent frame URL not found")
+        raise Exception("쿠팡 부모 프레임 URL 없음")
 
     r2       = requests.get(full_url); r2.raise_for_status()
     full_img = Image.open(io.BytesIO(r2.content)).convert("RGB")
@@ -186,7 +188,7 @@ def export_coupang(file_key, coupang_id, coupang_prefix, token, warnings):
         y_bottom = max(s["y_rel"] + s["h"] for s in g)
         top      = max(0, int(y_top * scale))
         bottom   = min(img_h, int(y_bottom * scale))
-        fname    = coupang_prefix + "(780)_\ucfe0\ud321_" + str(num).zfill(2)
+        fname    = coupang_prefix + "(780)_쿠팡_" + str(num).zfill(2)
         data     = compress_jpg(full_img.crop((0, top, img_w, bottom)), COUPANG_MAX_MB)
         results[fname] = data
     return results
@@ -195,36 +197,35 @@ def make_zip(thumb_results, detail_results, coupang_results):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname, data in thumb_results.items():
-            zf.writestr("\uc378\ub124\uc77c_PNG/" + fname + ".png", data)
+            zf.writestr("썸네일_PNG/" + fname + ".png", data)
         for fname, data in detail_results.items():
-            zf.writestr("\uc0c1\uc138\ud398\uc774\uc9c0_JPG/" + fname + ".jpg", data)
+            zf.writestr("상세페이지_JPG/" + fname + ".jpg", data)
         for fname, data in coupang_results.items():
-            zf.writestr("\ucfe0\ud321_JPG/" + fname + ".jpg", data)
+            zf.writestr("쿠팡_JPG/" + fname + ".jpg", data)
     return buf.getvalue()
 
-# ── Streamlit UI ──────────────────────────────────────────────────────
-st.set_page_config(page_title="Figma \uc628\ub77c\uc778\uc0c1\uc138 \ub0b4\ubcf4\ub0b4\uae30", page_icon="🎨", layout="centered")
-
-st.title("🎨 Figma \uc628\ub77c\uc778\uc0c1\uc138 \ub0b4\ubcf4\ub0b4\uae30")
-st.caption("\uc5b4\ub9b0\uc774\uacfc\ud559\ub3d9\uc544 · \uc5b4\ub9b0\uc774\uc218\ud559\ub3d9\uc544 · \uacfc\ud559\ub3d9\uc544 | v1.1")
+# Streamlit UI
+st.set_page_config(page_title="Figma 온라인상세 내보내기", page_icon="🎨", layout="centered")
+st.title("🎨 Figma 온라인상세 내보내기")
+st.caption("어린이과학동아 · 어린이수학동아 · 과학동아 | v1.1")
 st.divider()
 
-st.subheader("① Figma \ud1a0\ud070")
+st.subheader("① Figma 토큰")
 token = st.text_input("token", type="password", placeholder="figd_xxxxxxxxxxxxxxxx", label_visibility="collapsed")
 st.divider()
 
-st.subheader("② Figma \uc8fc\uc18c")
+st.subheader("② Figma 주소")
 figma_url = st.text_input("url", placeholder="https://www.figma.com/design/...?node-id=...", label_visibility="collapsed")
 st.divider()
 
-run = st.button("🚀 \ub0b4\ubcf4\ub0b4\uae30 \uc2e4\ud589", type="primary", use_container_width=True)
+run = st.button("🚀 내보내기 실행", type="primary", use_container_width=True)
 
 if run:
     if not token:
-        st.error("Figma \ud1a0\ud070\uc744 \uc785\ub825\ud558\uc138\uc694.")
+        st.error("Figma 토큰을 입력하세요.")
         st.stop()
     if not figma_url:
-        st.error("Figma \uc8fc\uc18c\ub97c \uc785\ub825\ud558\uc138\uc694.")
+        st.error("Figma 주소를 입력하세요.")
         st.stop()
 
     url        = unquote(figma_url.strip())
@@ -232,10 +233,10 @@ if run:
     node_match = re.search(r"node-id=([0-9]+)[%\-]([0-9]+)", url)
 
     if not key_match:
-        st.error("URL\uc5d0\uc11c \ud30c\uc77c \ud0a4\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4.")
+        st.error("URL에서 파일 키를 찾을 수 없습니다.")
         st.stop()
     if not node_match:
-        st.error("URL\uc5d0\uc11c node-id\ub97c \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \ucee8\ubc84\uc2a4 \uc120\ud0dd \ud6c4 URL\uc744 \ubcf5\uc0ac\ud558\uc138\uc694.")
+        st.error("URL에서 node-id를 찾을 수 없습니다. 캔버스를 선택 후 URL을 복사하세요.")
         st.stop()
 
     file_key  = key_match.group(1)
@@ -246,42 +247,42 @@ if run:
     bar       = st.progress(0)
 
     try:
-        status.info("🔍 \ub178\ub4dc \uad6c\uc870 \ud0d0\uc0c9 \uc911...")
+        status.info("🔍 노드 구조 탐색 중...")
         bar.progress(5)
         thumb_nodes, detail_nodes, coupang_id, coupang_prefix = discover_nodes(file_key, node_id, token)
-        status.info("✅ \ud0d0\uc0c9 \uc644\ub8cc — \uc378\ub124\uc77c " + str(len(thumb_nodes)) + "\uac1c · \uc0c1\uc138 " + str(len(detail_nodes)) + "\uac1c")
+        status.info("✅ 탐색 완료 — 썸네일 " + str(len(thumb_nodes)) + "개 · 상세 " + str(len(detail_nodes)) + "개")
 
         bar.progress(10)
-        status.info("🖼️ \uc378\ub124\uc77c PNG \ub2e4\uc6b4\ub85c\ub4dc \uc911... (" + str(len(thumb_nodes)) + "\uac1c)")
+        status.info("🖼️ 썸네일 PNG 다운로드 중... (" + str(len(thumb_nodes)) + "개)")
         thumb_results = download_nodes_parallel(file_key, thumb_nodes, "png", token)
         bar.progress(40)
 
-        status.info("📄 \uc0c1\uc138\ud398\uc774\uc9c0 JPG \ub2e4\uc6b4\ub85c\ub4dc \uc911... (" + str(len(detail_nodes)) + "\uac1c)")
+        status.info("📄 상세페이지 JPG 다운로드 중... (" + str(len(detail_nodes)) + "개)")
         detail_results = download_nodes_parallel(file_key, detail_nodes, "jpg", token)
         bar.progress(75)
 
-        status.info("🛒 \ucfe0\ud321 \uc774\ubbf8\uc9c0 \ucc98\ub9ac \uc911...")
+        status.info("🛒 쿠팡 이미지 처리 중...")
         coupang_results = export_coupang(file_key, coupang_id, coupang_prefix, token, warnings)
         bar.progress(95)
 
-        status.info("📦 ZIP \ud30c\uc77c \uc0dd\uc131 \uc911...")
+        status.info("📦 ZIP 파일 생성 중...")
         zip_data = make_zip(thumb_results, detail_results, coupang_results)
         bar.progress(100)
-        status.success("✅ \uc644\ub8cc!")
+        status.success("✅ 완료!")
 
         if warnings:
-            with st.expander("⚠️ \uacbd\uace0 \uba54\uc2dc\uc9c0", expanded=True):
+            with st.expander("⚠️ 경고 메시지", expanded=True):
                 for w in warnings:
                     st.warning(w)
 
         st.divider()
         col1, col2, col3 = st.columns(3)
-        col1.metric("\uc378\ub124\uc77c_PNG",     str(len(thumb_results)) + "\uc7a5")
-        col2.metric("\uc0c1\uc138\ud398\uc774\uc9c0_JPG", str(len(detail_results)) + "\uc7a5")
-        col3.metric("\ucfe0\ud321_JPG",       str(len(coupang_results)) + "\uc7a5")
+        col1.metric("썸네일_PNG",     str(len(thumb_results)) + "장")
+        col2.metric("상세페이지_JPG", str(len(detail_results)) + "장")
+        col3.metric("쿠팡_JPG",       str(len(coupang_results)) + "장")
 
         st.download_button(
-            label="📥 ZIP \ub2e4\uc6b4\ub85c\ub4dc",
+            label="📥 ZIP 다운로드",
             data=zip_data,
             file_name="figma_output_" + timestamp + ".zip",
             mime="application/zip",
@@ -292,16 +293,16 @@ if run:
     except Exception as e:
         bar.progress(0)
         import traceback
-        status.error("❌ \uc624\ub958: " + str(e))
+        status.error("❌ 오류: " + str(e))
         st.code(traceback.format_exc())
 
-with st.expander("📖 \uc0ac\uc6a9 \ubc29\ubc95"):
+with st.expander("📖 사용 방법"):
     st.markdown("""
-1. **Figma \ud1a0\ud070** \uc785\ub825 (figd_\ub85c \uc2dc\uc791\ud558\ub294 Personal Access Token)
-2. **Figma \ucee8\ubc84\uc2a4** \uc120\ud0dd \ud6c4 \ube0c\ub77c\uc6b0\uc800 URL \uc804\uccb4 \ubcf5\uc0ac
-3. **\uc2e4\ud589** \ubc84\ud2bc \ud074\ub9ad
-4. \uc644\ub8cc \ud6c4 **ZIP \ub2e4\uc6b4\ub85c\ub4dc** \ubc84\ud2bc \ud074\ub9ad
+1. **Figma 토큰** 입력 (figd_로 시작하는 Personal Access Token)
+2. **Figma 캔버스** 선택 후 브라우저 URL 전체 복사
+3. **실행** 버튼 클릭
+4. 완료 후 **ZIP 다운로드** 버튼 클릭
 
-**\uc9c0\uc6d0 \uc7a1\uc9c0:** \uc5b4\ub9b0\uc774\uacfc\ud559\ub3d9\uc544 · \uc5b4\ub9b0\uc774\uc218\ud559\ub3d9\uc544 · \uacfc\ud559\ub3d9\uc544
-**\ucd9c\ub825 \uad6c\uc870:** \uc378\ub124\uc77c_PNG / \uc0c1\uc138\ud398\uc774\uc9c0_JPG / \ucfe0\ud321_JPG (\uc790\ub3d9 \ubd84\ud560)
+**지원 잡지:** 어린이과학동아 · 어린이수학동아 · 과학동아
+**출력 구조:** 썸네일_PNG / 상세페이지_JPG / 쿠팡_JPG (자동 분할)
     """)
